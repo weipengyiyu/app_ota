@@ -1,8 +1,35 @@
+# Build outputs
 .build/
 .work/
+dist/
+out/
+evidence/
+**/stage/
+**/work/
+
+# Validation / test run artifacts
+validation/*.log
+validation/summary.json
+*.log
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
+.pytest_cache/
+
+# Object / native intermediates
+*.o
+*.a
+*.so
+*.so.*
+*.dylib
+*.exe
+*.elf
+
+# Local secrets / machine-local config
 config/host.local.conf
 compat/lab/devices.local.conf
 *.key
 *_key.pem
+!references/release-public-key.pem
