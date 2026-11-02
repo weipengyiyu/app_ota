@@ -174,12 +174,12 @@
     },
     {
       "source": "XMIPCLinuxV100R003C00SPC030/source/rootfs/ota_verify/Makefile",
-      "target": "build/verify.mk",
+      "target": "mk/verify.mk",
       "source_sha256": "e130775f00da8effe26beb569e3388139925411d2192b6dd78b37b2ed047e8f6"
     },
     {
       "source": "XMIPCLinuxV100R003C00SPC030/source/rootfs/ota_net/Makefile",
-      "target": "build/network.mk",
+      "target": "mk/network.mk",
       "source_sha256": "de54a927196761e0b9859b451fc992d700634112014b3e4fd4e38eea6e78fd64"
     },
     {

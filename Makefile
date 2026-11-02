@@ -18,8 +18,8 @@ AR ?= ar
 RANLIB ?= ranlib
 STRIP ?= strip
 mkdir = mkdir -p $(1)
-include $(PROJECT_ROOT)/build/verify.mk
-include $(PROJECT_ROOT)/build/network.mk
+include $(PROJECT_ROOT)/mk/verify.mk
+include $(PROJECT_ROOT)/mk/network.mk
 
 .PHONY: help native verify check install lab-control bundle factory
 help:

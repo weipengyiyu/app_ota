@@ -1,4 +1,4 @@
-# Build outputs
+# Build outputs / intermediates (never commit)
 .build/
 .work/
 dist/
@@ -6,19 +6,6 @@ out/
 evidence/
 **/stage/
 **/work/
-
-# Validation / test run artifacts
-validation/*.log
-validation/summary.json
-*.log
-
-# Python
-__pycache__/
-*.pyc
-*.pyo
-.pytest_cache/
-
-# Object / native intermediates
 *.o
 *.a
 *.so
@@ -26,6 +13,16 @@ __pycache__/
 *.dylib
 *.exe
 *.elf
+*.log
+
+# Local validation run leftovers (directory not tracked)
+validation/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
 
 # Local secrets / machine-local config
 config/host.local.conf

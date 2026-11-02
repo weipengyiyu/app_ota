@@ -18,7 +18,7 @@ config/            设备代理模板、激活策略、发布主机配置示例
 integration/       rootfs 覆盖层和开机集成入口
 server/            Nginx/Mosquitto/mTLS/ACL 配置模板
 compat/lab/        从原项目保留并适配的实验室 NFS/Telnet 工作流
-build/ third_party/ 离线原生构建规则与固定版本源码归档
+mk/ third_party/     离线原生构建规则与固定版本源码归档
 tools/ tests/      覆盖层生成器和隔离集成测试
 references/        原 SDK 集成片段、原设备清单和历史公钥，仅供比对
 ```

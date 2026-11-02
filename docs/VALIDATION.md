@@ -29,7 +29,7 @@ MQTT/TLS 测试仅在已安装 Mosquitto 与 mosquitto_pub 的主机运行；本
 
 ## 结果文件与复现
 
-服务器日志与构建输出仅在本地：`.build/native-build.log`、`.build/gk1221-build.log`、`.build/tests.log`，以及 `.build/native/stage/usr/bin`、`.build/gk1221/stage/usr/bin`。`validation/` 下的摘要与日志为本地产物，已加入 `.gitignore`，不提交到 Git。交付的 ARM 工具归档仅包含原生工具，设备运行时仍由 rootfs 覆盖层组装。
+服务器日志与构建输出仅在本地目录 `.build/`（已 gitignore，不进仓库）：`native-build.log`、`gk1221-build.log`、`tests.log`，以及 `native/stage/usr/bin`、`gk1221/stage/usr/bin`。交付的 ARM 工具归档仅包含原生工具，设备运行时仍由 rootfs 覆盖层组装。
 
 ```sh
 make native -j4
