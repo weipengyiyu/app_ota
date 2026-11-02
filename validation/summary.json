@@ -1,0 +1,50 @@
+{
+  "date": "2026-11-02",
+  "timezone": "Asia/Shanghai",
+  "source_commit": "aa6d7886de0ddd56f744d3fab1075e0fbe0c564f",
+  "source_integrity": {
+    "checked": 40,
+    "mismatches": []
+  },
+  "host_build": "passed",
+  "gk1221_arm_build": "passed",
+  "tests": {
+    "passed": 25,
+    "skipped": 0,
+    "seconds": 29.559
+  },
+  "device_deployment": false,
+  "production_services_changed": false,
+  "binaries": [
+    {
+      "path": "evidence/gk1221-arm/ota-http",
+      "bytes": 1328032,
+      "sha256": "fc5d7a1fbf0b40101e4e07f5843255aacb5d6d35fa6c30eea4f86beefad4b663"
+    },
+    {
+      "path": "evidence/gk1221-arm/ota-mqtt-sub",
+      "bytes": 578344,
+      "sha256": "fd23bca45dd9f795becc71d2d32a8b84cf9e8a2e0b644eb8adb0fc177710375e"
+    },
+    {
+      "path": "evidence/gk1221-arm/ota_verify_sig",
+      "bytes": 2923284,
+      "sha256": "e1676ab14bc969cb3a7b7e8e8416fce8a18cc736d7c250aebabd6639e53cbafb"
+    },
+    {
+      "path": "evidence/linux-x86_64/ota-http",
+      "bytes": 1598440,
+      "sha256": "443135f5946c19b7fa4bdded0d12c5f95a016cd80cbb0cedd6c94c2c4f1877f3"
+    },
+    {
+      "path": "evidence/linux-x86_64/ota-mqtt-sub",
+      "bytes": 665008,
+      "sha256": "d83f4174b017ed9e8cd51e9958d02e1d83f8c12bbc3d0d73195b84c7cfc2d264"
+    },
+    {
+      "path": "evidence/linux-x86_64/ota_verify_sig",
+      "bytes": 1111880,
+      "sha256": "2d60dfe27dd64c1135b8b5734cd1e02ae345cc8f7ab4a39fb1747fadbb923311"
+    }
+  ]
+}

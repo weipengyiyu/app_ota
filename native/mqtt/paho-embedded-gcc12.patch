@@ -1,0 +1,21 @@
+--- a/MQTTClient-C/src/MQTTClient.h
++++ b/MQTTClient-C/src/MQTTClient.h
+@@ -217,7 +217,7 @@
+  *  @param client - the client object to use
+  *  @return truth value indicating whether the client is connected to the server
+  */
+-DLLExport int MQTTIsConnected(MQTTClient* client)
++static inline int MQTTIsConnected(MQTTClient* client)
+ {
+   return client->isconnected;
+ }
+--- a/MQTTClient-C/src/MQTTClient.c
++++ b/MQTTClient-C/src/MQTTClient.c
+@@ -15,6 +15,7 @@
+  *   Ian Craggs - add ability to set message handler separately #6
+  *******************************************************************************/
+ #include "MQTTClient.h"
++#include <string.h>
+ 
+ static void NewMessageData(MessageData* md, MQTTString* aTopicName, MQTTMessage* aMessage) {
+     md->topicName = aTopicName;

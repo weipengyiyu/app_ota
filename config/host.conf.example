@@ -1,0 +1,18 @@
+# Copy to host.local.conf, or set OTA_HOST_CONFIG to a trusted external file.
+# Shell configuration: quote paths. Secrets remain outside this repository.
+OTA_APP_SOURCE=/srv/app-build/deploy
+SIGN_KEY=/secure/signing/app-ota-p256.pem
+TRUSTED_RELEASE_PUBKEY=/secure/signing/app-ota-public.pem
+WEB_ROOT=/srv/ota/gk1221
+HTTPS_BASE_URL=https://ota-download.example.com/gk1221
+MQTT_HOST=ota-broker.example.com
+MQTT_PORT=8883
+PUBLISHER_DIR=/etc/app-ota/publisher
+# Optional when publisher user needs to transfer ownership:
+# PUBLISH_OWNER=publisher:www-data
+PROD_DEVICES=""
+LAB_BOARD_IP=
+LAB_DEVICE_ID=
+LAB_BOARD_LIST=""
+NFS_SERVER=
+NFS_EXPORT_ROOT=

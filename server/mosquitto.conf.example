@@ -1,0 +1,13 @@
+# Dedicated broker template; certificate CN must match the provisioned username.
+listener 8883
+protocol mqtt
+allow_anonymous false
+cafile /etc/app-ota/pki/ca.pem
+certfile /etc/app-ota/pki/broker.crt
+keyfile /etc/app-ota/pki/broker.key
+require_certificate true
+use_identity_as_username true
+tls_version tlsv1.2
+acl_file /etc/app-ota/mosquitto.acl
+persistence true
+persistence_location /var/lib/mosquitto/

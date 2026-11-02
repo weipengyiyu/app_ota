@@ -1,0 +1,34 @@
+mkdir -p /home/logic/1221/app-ota-standalone/.build/native/stage/usr/bin
+cp -af /home/logic/1221/app-ota-standalone/.build/native/work/curl-build/src/curl /home/logic/1221/app-ota-standalone/.build/native/stage/usr/bin/ota-http
+chmod 0755 /home/logic/1221/app-ota-standalone/.build/native/stage/usr/bin/ota-http
+python3 -m unittest discover -s /home/logic/1221/app-ota-standalone/tests -v
+test_https_mtls_and_hostname_verification (test_network.TLS) ... ok
+test_mqtt_tls_persistent_campaign_notification (test_network.TLS) ... ok
+test_both_records_lost_preserves_newest_slot_counter (test_ota.OTA) ... ok
+test_bundle_builder_refuses_existing_output_and_symlinks (test_ota.OTA) ... ok
+test_counter_replay_and_pending_replay_rejected (test_ota.OTA) ... ok
+test_duplicate_manifest_field_rejected (test_ota.OTA) ... ok
+test_empty_prod_target_does_not_publish (test_ota.OTA) ... ok
+test_gate_missing_stale_moving_and_inhibit (test_ota.OTA) ... ok
+test_global_release_counter_crosses_versions_and_reserves_failure (test_ota.OTA) ... ok
+test_health_adapter_confirms_advancing_frames (test_ota.OTA) ... ok
+test_health_adapter_process_failure_rolls_back (test_ota.OTA) ... ok
+test_lock_rejects_competing_install_and_state_write (test_ota.OTA) ... ok
+test_native_verifier_real_crypto (test_ota.OTA) ... ok
+test_no_ungated_activation (test_ota.OTA) ... ok
+test_overlay_requires_explicit_key_and_has_all_components (test_ota.OTA) ... ok
+test_recovery_rejects_quarantined_slot (test_ota.OTA) ... ok
+test_shell_syntax (test_ota.OTA) ... ok
+test_signature_and_product_rejected (test_ota.OTA) ... ok
+test_signed_upgrade_and_confirmation (test_ota.OTA) ... ok
+test_state_corruption_fallback (test_ota.OTA) ... ok
+test_tampered_payload_rejected (test_ota.OTA) ... ok
+test_trial_cannot_be_overwritten (test_ota.OTA) ... ok
+test_trial_idempotence_and_exhaustion_rollback (test_ota.OTA) ... ok
+test_unlisted_file_and_symlink_rejected (test_ota.OTA) ... ok
+test_wrong_abi_hardware_and_format_rejected (test_ota.OTA) ... ok
+
+----------------------------------------------------------------------
+Ran 25 tests in 29.559s
+
+OK

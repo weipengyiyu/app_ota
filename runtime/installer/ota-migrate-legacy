@@ -1,0 +1,115 @@
+#!/bin/sh
+# One-time migration from the legacy /mnt/local APP layout.
+# migrate keeps the legacy copy until the new slot has booted successfully;
+# finalize then removes only the explicitly allow-listed legacy APP files.
+set -eu
+
+OTA_LIB_DIR="${OTA_LIB_DIR:-/usr/lib/ota}"
+. "$OTA_LIB_DIR/ota-state-lib.sh"
+OTA_BOOTCTL="${OTA_BOOTCTL:-/usr/sbin/ota-bootctl}"
+
+APP_ITEMS=${OTA_APP_ITEMS:?product profile must define OTA_APP_ITEMS}
+
+migrate() {
+    [ -x "$OTA_LOCAL_DIR/$OTA_APP_BINARY" ] || {
+        echo "ota-migrate-legacy: legacy demo_ai not found" >&2
+        exit 1
+    }
+    [ ! -e "$OTA_SLOT_DIR/app_A" ] || {
+        echo "ota-migrate-legacy: slot A already exists" >&2
+        exit 1
+    }
+
+    available=$(ota_available_kib)
+    ota_is_uint "$available" && [ "$available" -ge 40000 ] || {
+        echo "ota-migrate-legacy: insufficient free space for safe copy" >&2
+        exit 1
+    }
+
+    installing="$OTA_SLOT_DIR/app_A.installing.factory"
+    case "$installing" in "$OTA_SLOT_DIR/app_A.installing.factory") ;; *) exit 1 ;; esac
+    rm -rf "$installing"
+    mkdir -p "$installing/root"
+
+    for item in $APP_ITEMS; do
+        [ -e "$OTA_LOCAL_DIR/$item" ] || {
+            echo "ota-migrate-legacy: required item missing: $item" >&2
+            rm -rf "$installing"
+            exit 1
+        }
+        cp -a "$OTA_LOCAL_DIR/$item" "$installing/root/"
+    done
+
+    sed -i 's|^[[:space:]]*health_log_path[[:space:]]*=.*|health_log_path = /run/ota|' "$installing/root/config_1221.ini"
+    find "$installing/root" -type l -print | grep -q . && { rm -rf "$installing"; echo "ota-migrate-legacy: symlink rejected" >&2; exit 1; }
+    find "$installing/root" -type d -exec chmod 0755 {} \;
+    find "$installing/root" -type f -exec chmod 0644 {} \;
+    find "$installing/root" -type f -name '*.sh' -exec chmod 0755 {} \;
+    chmod 0755 "$installing/root/$OTA_APP_BINARY"
+    chown -R root:root "$installing"
+
+    (cd "$installing/root" && find . -type f -print | LC_ALL=C sort | xargs sha256sum) > "$installing/manifest.sha256"
+    file_count=$(wc -l < "$installing/manifest.sha256")
+    installed_kib=$(du -sk "$installing" | awk '{ print $1 }')
+    [ "$installed_kib" -le "$OTA_SLOT_MAX_KIB" ] || {
+        rm -rf "$installing"
+        echo "ota-migrate-legacy: factory APP exceeds slot limit" >&2
+        exit 1
+    }
+    cat > "$installing/slot.meta" <<EOF
+FORMAT_VERSION=2
+PRODUCT_ID=$OTA_PRODUCT_ID
+HARDWARE_REVISION=$OTA_HARDWARE_REVISION
+ROOTFS_ABI=$OTA_ROOTFS_ABI
+ARTIFACT_ID=factory-migrated
+APP_VERSION=V0.0.0
+RELEASE_COUNTER=0
+UNPACKED_KIB=$installed_kib
+FILE_COUNT=$file_count
+TRANSACTION_ID=factory-migration
+CAMPAIGN_ID=factory
+EOF
+    touch "$installing/slot.ready"
+    sync
+    mkdir -p "$OTA_SLOT_DIR"
+    mv "$installing" "$OTA_SLOT_DIR/app_A"
+    sync
+
+    "$OTA_BOOTCTL" init
+    "$OTA_BOOTCTL" status
+    ota_audit LEGACY_MIGRATED "slot=A,size_kib=$installed_kib"
+    echo "ota-migrate-legacy: slot A prepared. Reboot and validate it before finalize."
+}
+
+finalize() {
+    ota_load_state || { echo "ota-migrate-legacy: state unavailable" >&2; exit 1; }
+    [ "$PHASE" = ACTIVE ] && [ "$CONFIRMED_SLOT" = A ] || {
+        echo "ota-migrate-legacy: slot A is not confirmed ACTIVE" >&2
+        exit 1
+    }
+    ota_verify_slot A || { echo "ota-migrate-legacy: slot A verification failed" >&2; exit 1; }
+    [ "$(cat "$OTA_RUN_DIR/selected_slot" 2>/dev/null)" = A ] || {
+        echo "ota-migrate-legacy: current boot did not select slot A" >&2
+        exit 1
+    }
+    pid=$(cat "$OTA_RUN_DIR/demo_ai.pid" 2>/dev/null || echo 0)
+    ota_is_uint "$pid" && kill -0 "$pid" 2>/dev/null || {
+        echo "ota-migrate-legacy: slot A APP is not healthy/running" >&2
+        exit 1
+    }
+    for item in $APP_ITEMS; do
+        [ ! -e "$OTA_LOCAL_DIR/$item" ] || rm -rf "$OTA_LOCAL_DIR/$item"
+    done
+    sync
+    ota_audit LEGACY_FINALIZED "slot=A"
+    echo "ota-migrate-legacy: legacy APP copy removed after confirmed slot-A boot."
+}
+
+ota_lock || exit 1
+trap ota_unlock EXIT
+trap 'exit 1' HUP INT TERM
+case "${1:-}" in
+    migrate) migrate ;;
+    finalize) finalize ;;
+    *) echo "usage: $0 {migrate|finalize}" >&2; exit 2 ;;
+esac

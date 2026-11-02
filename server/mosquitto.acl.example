@@ -1,0 +1,5 @@
+# Certificate CN publisher may publish campaign notices only.
+user publisher
+topic write ota/GK1221-ADAS/+/campaign
+# Each device certificate CN is its DEVICE_ID; read only its own campaign.
+pattern read ota/GK1221-ADAS/%u/campaign

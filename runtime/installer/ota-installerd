@@ -1,0 +1,145 @@
+#!/bin/sh
+# Install a pre-extracted, signed APP bundle into the inactive logical slot.
+# Network transport is deliberately outside this privileged process.
+set -u
+
+OTA_LIB_DIR="${OTA_LIB_DIR:-/usr/lib/ota}"
+. "$OTA_LIB_DIR/ota-state-lib.sh"
+
+OTA_VERIFY_BIN="${OTA_VERIFY_BIN:-/usr/bin/ota_verify_sig}"
+OTA_PUBKEY="${OTA_PUBKEY:-/etc/ota_pubkey.pem}"
+OTA_PRODUCT_FILE="${OTA_PRODUCT_FILE:-/etc/ota/product_id}"
+OTA_ROOTFS_ABI_FILE="${OTA_ROOTFS_ABI_FILE:-/etc/ota/rootfs_abi}"
+OTA_BOOTCTL="${OTA_BOOTCTL:-/usr/sbin/ota-bootctl}"
+OTA_DOWNLOAD_DIR="${OTA_DOWNLOAD_DIR:-$OTA_LOCAL_DIR/ota_download}"
+
+die() {
+    echo "ota-installerd: $*" >&2
+    ota_audit INSTALL_FAILED "${1:-UNKNOWN}"
+    exit 1
+}
+
+meta_get() {
+    awk -F= -v key="$1" '$1 == key { n++; value=$2 } END { if(n!=1) exit 1; print value }' "$bundle/manifest.env" 2>/dev/null
+}
+
+[ "${1:-}" = install ] && [ "$#" -eq 2 ] || die "usage: $0 install <bundle-directory>"
+bundle="$2"
+[ "${OTA_CONSUME_BUNDLE:-0}" != 1 ] || case "$bundle" in
+    "$OTA_DOWNLOAD_DIR"/*) ;;
+    *) die "refusing to consume bundle outside download directory" ;;
+esac
+[ -d "$bundle/payload" ] || die "missing payload directory"
+for f in manifest.env manifest.sha256 signed-data.bin manifest.sig; do
+    [ -s "$bundle/$f" ] || die "missing $f"
+done
+[ -x "$OTA_VERIFY_BIN" ] || die "signature verifier unavailable"
+[ -s "$OTA_PUBKEY" ] || die "public key unavailable"
+
+tmp_base="${TMPDIR:-${OTA_RUN_DIR:-/run/ota}}/ota-install.$$"
+reconstructed="$tmp_base.signed"
+actual_list="$tmp_base.actual"
+manifest_list="$tmp_base.manifest"
+trap 'rm -f "$reconstructed" "$actual_list" "$manifest_list"; ota_unlock' EXIT
+trap 'exit 1' HUP INT TERM
+
+cat "$bundle/manifest.env" "$bundle/manifest.sha256" > "$reconstructed" || die "cannot reconstruct signed data"
+signed_hash=$(sha256sum "$bundle/signed-data.bin" | awk '{ print $1 }')
+reconstructed_hash=$(sha256sum "$reconstructed" | awk '{ print $1 }')
+[ "$signed_hash" = "$reconstructed_hash" ] || die "signed data does not match manifest"
+"$OTA_VERIFY_BIN" "$OTA_PUBKEY" "$bundle/signed-data.bin" "$bundle/manifest.sig" || die "signature verification failed"
+
+[ "$(meta_get FORMAT_VERSION)" = 2 ] || die "unsupported manifest format"
+product=$(meta_get PRODUCT_ID)
+hardware=$(meta_get HARDWARE_REVISION)
+rootfs_abi=$(meta_get ROOTFS_ABI)
+artifact=$(meta_get ARTIFACT_ID)
+version=$(meta_get APP_VERSION)
+counter=$(meta_get RELEASE_COUNTER)
+unpacked_kib=$(meta_get UNPACKED_KIB)
+file_count=$(meta_get FILE_COUNT)
+transaction=$(meta_get TRANSACTION_ID)
+campaign=$(meta_get CAMPAIGN_ID)
+
+for token in "$product" "$hardware" "$rootfs_abi" "$artifact" "$version" "$transaction" "$campaign"; do
+    ota_is_token "$token" || die "invalid manifest token"
+done
+ota_is_uint "$counter" && ota_is_uint "$unpacked_kib" && ota_is_uint "$file_count" || die "invalid numeric manifest field"
+[ "$unpacked_kib" -le "$OTA_SLOT_MAX_KIB" ] || die "candidate exceeds slot limit"
+[ "$product" = "$(cat "$OTA_PRODUCT_FILE" 2>/dev/null)" ] || die "product mismatch"
+[ "$rootfs_abi" = "$(cat "$OTA_ROOTFS_ABI_FILE" 2>/dev/null)" ] || die "rootfs ABI mismatch"
+[ "$hardware" = "$OTA_HARDWARE_REVISION" ] || die "hardware mismatch"
+
+if find "$bundle/payload" -type l -print 2>/dev/null | grep -q .; then
+    die "symbolic links are forbidden"
+fi
+if find "$bundle/payload" ! -type f ! -type d -print 2>/dev/null | grep -q .; then
+    die "special files are forbidden"
+fi
+if find "$bundle/payload" -print | grep -q '[[:space:]]'; then
+    die "whitespace in paths is forbidden"
+fi
+
+(cd "$bundle/payload" && find . -type f -print | LC_ALL=C sort) > "$actual_list"
+awk '{ print $2 }' "$bundle/manifest.sha256" | LC_ALL=C sort > "$manifest_list"
+cmp -s "$actual_list" "$manifest_list" || die "payload file list mismatch"
+[ "$(wc -l < "$actual_list")" -eq "$file_count" ] || die "payload file count mismatch"
+(cd "$bundle/payload" && sha256sum -c "$bundle/manifest.sha256") >/dev/null 2>&1 || die "payload hash mismatch"
+
+ota_lock || die "transaction busy"
+ota_load_state || die "OTA state unavailable"
+case "$PHASE" in
+    ACTIVE|ROLLED_BACK|STAGED) ;;
+    *) die "cannot install during phase=$PHASE" ;;
+esac
+[ "$counter" -gt "$ACTIVE_COUNTER" ] || die "rollback counter rejected"
+if [ "$PHASE" = STAGED ]; then
+    [ "$counter" -gt "$PENDING_COUNTER" ] || die "candidate counter is not newer"
+fi
+if [ "$CONFIRMED_SLOT" = A ]; then target=B; else target=A; fi
+target_base=$(ota_slot_base "$target") || die "invalid target slot"
+case "$target_base" in
+    "$OTA_SLOT_DIR/app_A"|"$OTA_SLOT_DIR/app_B") ;;
+    *) die "unsafe target path" ;;
+esac
+installing="$target_base.installing.$transaction"
+case "$installing" in
+    "$OTA_SLOT_DIR/app_A.installing."*|"$OTA_SLOT_DIR/app_B.installing."*) ;;
+    *) die "unsafe installing path" ;;
+esac
+
+rm -rf "$installing"
+rm -rf "$target_base"
+mkdir -p "$installing/root" || die "cannot create target"
+cp -a "$bundle/payload/." "$installing/root/" || die "payload copy failed"
+find "$installing/root" -type d -exec chmod 0755 {} \;
+find "$installing/root" -type f -exec chmod 0644 {} \;
+find "$installing/root" -type f -name '*.sh' -exec chmod 0755 {} \;
+chmod 0755 "$installing/root/$OTA_APP_BINARY"
+cp "$bundle/manifest.sha256" "$installing/manifest.sha256"
+cp "$bundle/manifest.env" "$installing/slot.meta"
+(cd "$installing/root" && sha256sum -c "$installing/manifest.sha256") >/dev/null 2>&1 || die "installed slot hash mismatch"
+installed_kib=$(du -sk "$installing" | awk '{ print $1 }')
+[ "$installed_kib" -le "$OTA_SLOT_MAX_KIB" ] || die "installed slot exceeds limit"
+touch "$installing/slot.ready"
+sync
+mv "$installing" "$target_base" || die "atomic slot publish failed"
+sync
+
+if [ "${OTA_CONSUME_BUNDLE:-0}" = 1 ]; then
+    rm -rf "$bundle"
+    sync
+fi
+
+available_kib=$(ota_available_kib)
+ota_is_uint "$available_kib" || die "cannot determine free space"
+if [ "$available_kib" -lt "$OTA_RESERVE_KIB" ]; then
+    rm -rf "$target_base"
+    sync
+    die "free-space reserve violated after bundle cleanup"
+fi
+
+"$OTA_BOOTCTL" stage "$target" "$artifact" "$version" "$counter" "$transaction" "$campaign" || die "cannot stage candidate"
+ota_audit INSTALL_COMPLETE "slot=$target,artifact=$artifact"
+echo "ota-installerd: staged slot=$target version=$version artifact=$artifact"
+echo "Run 'ota-activation-gate authorize' only after the robot controller publishes a fresh safe state."

@@ -1,0 +1,102 @@
+#!/bin/sh
+# The only supported production path from STAGED to TRIAL_ARMED.
+# Robot control owns SAFE_STATE_FILE and must update it atomically.
+set -u
+
+OTA_LIB_DIR="${OTA_LIB_DIR:-/usr/lib/ota}"
+. "$OTA_LIB_DIR/ota-state-lib.sh"
+
+POLICY_FILE="${OTA_ACTIVATION_POLICY:-/etc/ota/activation-policy.conf}"
+OTA_BOOTCTL="${OTA_BOOTCTL:-/usr/sbin/ota-bootctl}"
+[ -r "$POLICY_FILE" ] || { echo "ota-activation-gate: missing policy" >&2; exit 1; }
+. "$POLICY_FILE"
+APP_HEALTH_MAX_AGE_SEC="${APP_HEALTH_MAX_AGE_SEC:-30}"
+APP_HEALTH_LOG_DIR="${APP_HEALTH_LOG_DIR:-/mnt/sd}"
+CURRENT_APP_HEALTH_MODE="${CURRENT_APP_HEALTH_MODE:-enforce}"
+ALLOW_FACTORY_HEALTH_BOOTSTRAP="${ALLOW_FACTORY_HEALTH_BOOTSTRAP:-0}"
+
+fail() {
+    echo "BLOCKED: $*" >&2
+    ota_audit ACTIVATION_BLOCKED "${1:-UNKNOWN}"
+    exit 1
+}
+
+safe_get() {
+    awk -F= -v key="$1" '$1 == key { n++; value=$2 } END { if(n!=1) exit 1; print value }' "$SAFE_STATE_FILE" 2>/dev/null
+}
+
+. "${OTA_HEALTH_ADAPTER:-$OTA_LIB_DIR/health-functions.sh}"
+
+check_policy() {
+    ota_load_state || fail STATE_UNAVAILABLE
+    [ "$PHASE" = STAGED ] || fail NO_STAGED_CANDIDATE
+    ota_slot_name_valid "$PENDING_SLOT" || fail INVALID_PENDING_SLOT
+    ota_verify_slot "$PENDING_SLOT" || fail INVALID_PENDING_SLOT_CONTENT
+    [ ! -e "$UPDATE_INHIBIT_FILE" ] || fail UPDATE_INHIBITED
+
+    ota_free=$(ota_available_kib)
+    ota_is_uint "$ota_free" || fail FREE_SPACE_UNKNOWN
+    [ "$ota_free" -ge "$MIN_FREE_KIB" ] || fail FREE_SPACE_LOW
+
+    if [ "$REQUIRE_WATCHDOG" = 1 ]; then
+        [ -c /dev/watchdog ] || [ -c /dev/watchdog0 ] || fail WATCHDOG_UNAVAILABLE
+    fi
+
+    [ -s "$SAFE_STATE_FILE" ] || fail SAFE_STATE_MISSING
+    ota_now=$(date +%s 2>/dev/null) || fail CLOCK_UNAVAILABLE
+    ota_mtime=$(stat -c %Y "$SAFE_STATE_FILE" 2>/dev/null) || fail SAFE_STATE_TIMESTAMP_UNAVAILABLE
+    ota_is_uint "$ota_now" && ota_is_uint "$ota_mtime" || fail SAFE_STATE_TIMESTAMP_INVALID
+    ota_age=$((ota_now - ota_mtime))
+    [ "$ota_age" -ge 0 ] && [ "$ota_age" -le "$SAFE_STATE_MAX_AGE_SEC" ] || fail SAFE_STATE_STALE
+
+    [ "$(safe_get SAFE)" = 1 ] || fail ROBOT_NOT_SAFE
+    [ "$(safe_get STATE)" = IDLE ] || fail ROBOT_NOT_IDLE
+    [ "$(safe_get SPEED_MPS)" = 0 ] || fail ROBOT_MOVING
+    [ "$(safe_get ACTUATORS_DISABLED)" = 1 ] || fail ACTUATORS_ENABLED
+    [ "$(safe_get POWER_OK)" = 1 ] || fail POWER_NOT_OK
+
+    if [ "$REQUIRE_APP_HEALTH" = 1 ]; then
+        case "$CURRENT_APP_HEALTH_MODE" in
+            enforce|warn) ;;
+            *) fail INVALID_CURRENT_APP_HEALTH_MODE ;;
+        esac
+        if ! check_current_app_health; then
+            if [ "$CURRENT_APP_HEALTH_MODE" = enforce ]; then
+                fail "$CURRENT_APP_HEALTH_REASON"
+            fi
+            ota_audit ACTIVATION_CURRENT_APP_HEALTH_WARNING \
+                "reason=$CURRENT_APP_HEALTH_REASON,active_slot=$ACTIVE_SLOT"
+            echo "WARNING: $CURRENT_APP_HEALTH_REASON; proceeding under audited recovery policy" >&2
+        fi
+    fi
+
+    for ota_status in /mnt/sd/vpss_yuv_record.status /mnt/sd/svp_yuv_record.status; do
+        [ ! -s "$ota_status" ] || \
+            ! grep -Eq '^active=(recording|running|active|1)$|^recording=1$' "$ota_status" || \
+            fail RECORDING_ACTIVE
+    done
+    echo "READY: slot=$PENDING_SLOT version=$PENDING_VERSION transaction=$TRANSACTION_ID"
+}
+
+authorize() {
+    ota_lock || fail TRANSACTION_BUSY
+    trap ota_unlock EXIT
+    trap 'exit 1' HUP INT TERM
+    check_policy
+    ota_auth="$OTA_RUN_DIR/activation.authorization"
+    umask 077
+    printf 'TRANSACTION_ID=%s\n' "$TRANSACTION_ID" > "$ota_auth" || fail AUTHORIZATION_WRITE_FAILED
+    sync
+    "$OTA_BOOTCTL" activate-internal || {
+        rm -f "$ota_auth"
+        fail ACTIVATION_ARM_FAILED
+    }
+    ota_audit ACTIVATION_APPROVED "transaction=$TRANSACTION_ID"
+    echo "ARMED: reboot may now be scheduled by ota-agentd"
+}
+
+case "${1:-}" in
+    check) check_policy ;;
+    authorize) authorize ;;
+    *) echo "usage: $0 {check|authorize}" >&2; exit 2 ;;
+esac

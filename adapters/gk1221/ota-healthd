@@ -1,0 +1,95 @@
+#!/bin/sh
+# Confirm a trial only after process, fresh heartbeat and advancing SVP frames.
+set -u
+
+OTA_BOOTCTL="${OTA_BOOTCTL:-/usr/sbin/ota-bootctl}"
+OTA_RUN_DIR="${OTA_RUN_DIR:-/run/ota}"
+OTA_POLICY_FILE="${OTA_HEALTH_POLICY:-/etc/ota/activation-policy.conf}"
+[ ! -r "$OTA_POLICY_FILE" ] || . "$OTA_POLICY_FILE"
+APP_HEALTH_LOG_DIR="${APP_HEALTH_LOG_DIR:-/mnt/sd}"
+OTA_HEALTH_TIMEOUT="${OTA_HEALTH_TIMEOUT:-180}"
+OTA_HEALTH_INTERVAL="${OTA_HEALTH_INTERVAL:-10}"
+OTA_HEALTH_MIN_GOOD="${OTA_HEALTH_MIN_GOOD:-6}"
+
+find_health_log() {
+    health_pid="$1"
+    # demo_health_log.c names structured logs demo_ai_<time>_<pid>.log.
+    # Match the current process exactly; never consume launcher/stdout logs.
+    ls -1t "$APP_HEALTH_LOG_DIR"/demo_ai_*_"$health_pid".log 2>/dev/null | head -1
+}
+
+fail_trial() {
+    ota_reason="$1"
+    echo "ota-healthd: failed: $ota_reason" >&2
+    "$OTA_BOOTCTL" mark-bad "$ota_reason" || true
+    sync
+    [ "${OTA_REBOOT_ON_HEALTH_FAIL:-1}" = 1 ] && reboot
+    exit 1
+}
+
+[ "$(cat "$OTA_RUN_DIR/trial" 2>/dev/null)" = 1 ] || exit 0
+
+elapsed=0
+good=0
+last_svp=-1
+last_vpss_fail=-1
+last_svp_fail=-1
+last_reason=HEALTH_TIMEOUT
+
+while [ "$elapsed" -lt "$OTA_HEALTH_TIMEOUT" ]; do
+    sleep "$OTA_HEALTH_INTERVAL"
+    elapsed=$((elapsed + OTA_HEALTH_INTERVAL))
+
+    pid=$(cat "$OTA_RUN_DIR/demo_ai.pid" 2>/dev/null || echo 0)
+    case "$pid" in ''|*[!0-9]*) pid=0 ;; esac
+    [ "$pid" -gt 1 ] && kill -0 "$pid" 2>/dev/null || fail_trial PROCESS_EXITED
+
+    log_file=$(find_health_log "$pid")
+    [ -n "$log_file" ] || { good=0; continue; }
+    printf '%s\n' "$log_file" > "$OTA_RUN_DIR/demo_ai.health.log.path"
+
+    now=$(date +%s 2>/dev/null || echo 0)
+    modified=$(stat -c %Y "$log_file" 2>/dev/null || echo 0)
+    case "$now:$modified" in *[!0-9:]*) good=0; continue ;; esac
+    age=$((now - modified))
+    [ "$age" -ge 0 ] && [ "$age" -le 30 ] || { good=0; continue; }
+
+    alive=$(grep "ALIVE pid=$pid " "$log_file" 2>/dev/null | tail -1)
+    [ -n "$alive" ] || { good=0; continue; }
+    svp=$(echo "$alive" | sed -n 's/.*svp_ok=\([0-9][0-9]*\).*/\1/p')
+    vpss_fail=$(echo "$alive" | sed -n 's/.*vpss_fail=\([0-9][0-9]*\).*/\1/p')
+    svp_fail=$(echo "$alive" | sed -n 's/.*svp_fail=\([0-9][0-9]*\).*/\1/p')
+    metrics_valid=1
+    for metric in "$svp" "$vpss_fail" "$svp_fail"; do
+        case "$metric" in ''|*[!0-9]*) metrics_valid=0 ;; esac
+    done
+    [ "$metrics_valid" = 1 ] || { good=0; continue; }
+
+    if [ "$last_svp" -ge 0 ]; then
+        if [ "$vpss_fail" -gt "$last_vpss_fail" ]; then
+            last_reason=VPSS_FAILED
+            good=0
+        elif [ "$svp_fail" -gt "$last_svp_fail" ]; then
+            last_reason=SVP_FAILED
+            good=0
+        elif [ "$svp" -gt "$last_svp" ]; then
+            last_reason=HEALTH_TIMEOUT
+            good=$((good + 1))
+        else
+            last_reason=NO_FRAME_PROGRESS
+            good=0
+        fi
+    fi
+    last_svp="$svp"
+    last_vpss_fail="$vpss_fail"
+    last_svp_fail="$svp_fail"
+
+    echo "ota-healthd: elapsed=$elapsed svp_ok=$svp vpss_fail=$vpss_fail svp_fail=$svp_fail consecutive_good=$good"
+    if [ "$good" -ge "$OTA_HEALTH_MIN_GOOD" ]; then
+        "$OTA_BOOTCTL" mark-good || fail_trial MARK_GOOD_FAILED
+        echo "ota-healthd: trial confirmed"
+        exit 0
+    fi
+done
+
+fail_trial "$last_reason"

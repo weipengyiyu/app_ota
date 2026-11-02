@@ -1,0 +1,227 @@
+#!/bin/sh
+set -u
+
+OTA_LIB_DIR="${OTA_LIB_DIR:-/usr/lib/ota}"
+. "$OTA_LIB_DIR/ota-state-lib.sh"
+
+die() {
+    echo "ota-bootctl: $*" >&2
+    exit 1
+}
+
+init_state() {
+    ota_load_state && return 0
+    ota_state_from_valid_slots || die "no valid state and no valid application slot metadata"
+    # Seed both alternating records so the very first boot already tolerates
+    # one torn/corrupt state file.
+    ota_write_state || die "cannot initialize primary state"
+    ota_write_state || die "cannot initialize redundant state"
+    ota_audit STATE_INITIALIZED "slot=$CONFIRMED_SLOT"
+}
+
+rollback_pending() {
+    ota_reason="${1:-TRIAL_FAILED}"
+    if ota_slot_name_valid "$PENDING_SLOT"; then
+        ota_failed_base=$(ota_slot_base "$PENDING_SLOT")
+        mkdir -p "$OTA_STATE_DIR/quarantine"
+        printf '%s\n' "$ota_reason" > "$OTA_STATE_DIR/quarantine/$PENDING_ARTIFACT.reason"
+    fi
+    ACTIVE_SLOT="$CONFIRMED_SLOT"
+    PENDING_SLOT=NONE
+    PENDING_ARTIFACT=NONE
+    PENDING_VERSION=NONE
+    PENDING_COUNTER=0
+    BOOT_ATTEMPTS=0
+    PHASE=ROLLED_BACK
+    LAST_ERROR="$ota_reason"
+    ota_write_state || die "cannot persist rollback"
+    ota_audit ROLLED_BACK "$ota_reason"
+}
+
+select_slot() {
+    init_state
+    ota_load_state || die "state unavailable"
+    ota_prepare_runtime
+    ota_trial_marker="$OTA_RUN_DIR/trial_attempt_recorded"
+
+    case "$PHASE" in
+        TRIAL_ARMED)
+            ota_slot_name_valid "$PENDING_SLOT" || die "trial has no pending slot"
+            if [ "$BOOT_ATTEMPTS" -ge "$MAX_BOOT_ATTEMPTS" ]; then
+                rollback_pending BOOT_ATTEMPTS_EXCEEDED
+                ota_load_state || die "state unavailable after rollback"
+            else
+                BOOT_ATTEMPTS=$((BOOT_ATTEMPTS + 1))
+                ACTIVE_SLOT="$PENDING_SLOT"
+                PHASE=TRIAL
+                LAST_ERROR=NONE
+                ota_write_state || die "cannot arm trial boot"
+                ota_audit TRIAL_BOOT "slot=$ACTIVE_SLOT,attempt=$BOOT_ATTEMPTS"
+                printf '%s:%s\n' "$TRANSACTION_ID" "$BOOT_ATTEMPTS" > "$ota_trial_marker"
+            fi
+            ;;
+        TRIAL)
+            ota_slot_name_valid "$PENDING_SLOT" || die "trial has no pending slot"
+            ACTIVE_SLOT="$PENDING_SLOT"
+
+            # /run is recreated at boot. The marker therefore makes select
+            # idempotent within one boot while still counting the next real
+            # reboot. Without it, diagnostics that merely ask for the selected
+            # root consume all trial attempts and cause a false rollback.
+            if [ ! -s "$ota_trial_marker" ]; then
+                if [ "$BOOT_ATTEMPTS" -ge "$MAX_BOOT_ATTEMPTS" ]; then
+                    rollback_pending BOOT_ATTEMPTS_EXCEEDED
+                    ota_load_state || die "state unavailable after rollback"
+                    ACTIVE_SLOT="$CONFIRMED_SLOT"
+                else
+                    BOOT_ATTEMPTS=$((BOOT_ATTEMPTS + 1))
+                    LAST_ERROR=NONE
+                    ota_write_state || die "cannot count trial boot"
+                    ota_audit TRIAL_BOOT "slot=$ACTIVE_SLOT,attempt=$BOOT_ATTEMPTS"
+                    printf '%s:%s\n' "$TRANSACTION_ID" "$BOOT_ATTEMPTS" > "$ota_trial_marker"
+                fi
+            fi
+            ;;
+        STAGED)
+            ACTIVE_SLOT="$CONFIRMED_SLOT"
+            ;;
+        *)
+            ACTIVE_SLOT="$CONFIRMED_SLOT"
+            ;;
+    esac
+
+    if ! ota_verify_slot "$ACTIVE_SLOT"; then
+        if [ "$ACTIVE_SLOT" != "$CONFIRMED_SLOT" ] && ota_verify_slot "$CONFIRMED_SLOT"; then
+            rollback_pending SLOT_VERIFICATION_FAILED
+            ota_load_state || die "state unavailable after verification rollback"
+            ACTIVE_SLOT="$CONFIRMED_SLOT"
+        else
+            ota_audit RECOVERY_REQUIRED no_valid_confirmed_slot
+            die "confirmed slot is invalid; recovery required"
+        fi
+    fi
+
+    ota_root=$(ota_slot_root "$ACTIVE_SLOT") || die "invalid selected slot"
+    echo "$ACTIVE_SLOT" > "$OTA_RUN_DIR/selected_slot"
+    echo "$ota_root" > "$OTA_RUN_DIR/selected_root"
+    [ "$PHASE" = TRIAL ] && echo 1 > "$OTA_RUN_DIR/trial" || echo 0 > "$OTA_RUN_DIR/trial"
+    sync
+    echo "$ota_root"
+}
+
+stage_slot() {
+    [ "$#" -eq 6 ] || die "stage <A|B> <artifact> <version> <counter> <transaction> <campaign>"
+    ota_slot="$1"
+    ota_artifact="$2"
+    ota_version="$3"
+    ota_counter="$4"
+    ota_tx="$5"
+    ota_campaign="$6"
+    init_state
+    ota_load_state || die "state unavailable"
+    ota_slot_name_valid "$ota_slot" || die "invalid slot"
+    case "$PHASE" in ACTIVE|ROLLED_BACK|STAGED) ;; *) die "trial in progress" ;; esac
+    [ "$ota_slot" != "$CONFIRMED_SLOT" ] || die "refusing to stage confirmed slot"
+    ota_is_token "$ota_artifact" && ota_is_token "$ota_version" && ota_is_token "$ota_tx" && ota_is_token "$ota_campaign" || die "invalid metadata token"
+    ota_is_uint "$ota_counter" || die "invalid release counter"
+    [ "$ota_counter" -gt "$ACTIVE_COUNTER" ] || die "release counter is not newer"
+    if [ "$PHASE" = STAGED ]; then
+        [ "$ota_counter" -gt "$PENDING_COUNTER" ] || die "release counter is not newer than pending"
+    fi
+    ota_verify_slot "$ota_slot" || die "candidate slot verification failed"
+
+    TRANSACTION_ID="$ota_tx"
+    CAMPAIGN_ID="$ota_campaign"
+    PENDING_SLOT="$ota_slot"
+    PENDING_ARTIFACT="$ota_artifact"
+    PENDING_VERSION="$ota_version"
+    PENDING_COUNTER="$ota_counter"
+    BOOT_ATTEMPTS=0
+    PHASE=STAGED
+    LAST_ERROR=NONE
+    ota_write_state || die "cannot persist staged state"
+    ota_audit STAGED "slot=$ota_slot,artifact=$ota_artifact"
+}
+
+activate_slot() {
+    init_state
+    ota_load_state || die "state unavailable"
+    [ "$PHASE" = STAGED ] || die "no staged candidate"
+    ota_slot_name_valid "$PENDING_SLOT" || die "invalid pending slot"
+    ota_verify_slot "$PENDING_SLOT" || die "candidate slot is invalid"
+    ota_auth="$OTA_RUN_DIR/activation.authorization"
+    [ -s "$ota_auth" ] || die "activation gate authorization missing"
+    ota_authorized_tx=$(awk -F= '$1 == "TRANSACTION_ID" { print $2; exit }' "$ota_auth" 2>/dev/null)
+    rm -f "$ota_auth"
+    [ "$ota_authorized_tx" = "$TRANSACTION_ID" ] || die "activation authorization mismatch"
+    BOOT_ATTEMPTS=0
+    PHASE=TRIAL_ARMED
+    LAST_ERROR=NONE
+    ota_write_state || die "cannot arm activation"
+    ota_audit ACTIVATION_ARMED "slot=$PENDING_SLOT"
+}
+
+mark_good() {
+    init_state
+    ota_load_state || die "state unavailable"
+    [ "$PHASE" = TRIAL ] || die "not in trial"
+    [ "$ACTIVE_SLOT" = "$PENDING_SLOT" ] || die "active and pending slots differ"
+    ota_verify_slot "$ACTIVE_SLOT" || die "active trial slot is invalid"
+    CONFIRMED_SLOT="$ACTIVE_SLOT"
+    ACTIVE_ARTIFACT="$PENDING_ARTIFACT"
+    ACTIVE_VERSION="$PENDING_VERSION"
+    ACTIVE_COUNTER="$PENDING_COUNTER"
+    PENDING_SLOT=NONE
+    PENDING_ARTIFACT=NONE
+    PENDING_VERSION=NONE
+    PENDING_COUNTER=0
+    BOOT_ATTEMPTS=0
+    PHASE=ACTIVE
+    LAST_ERROR=NONE
+    ota_write_state || die "cannot confirm trial"
+    ota_audit MARK_GOOD "slot=$CONFIRMED_SLOT,version=$ACTIVE_VERSION"
+}
+
+status() {
+    init_state
+    ota_load_state || die "state unavailable"
+    cat <<EOF
+phase=$PHASE
+generation=$GENERATION
+active_slot=$ACTIVE_SLOT
+confirmed_slot=$CONFIRMED_SLOT
+pending_slot=$PENDING_SLOT
+active_artifact=$ACTIVE_ARTIFACT
+pending_artifact=$PENDING_ARTIFACT
+active_version=$ACTIVE_VERSION
+pending_version=$PENDING_VERSION
+active_counter=$ACTIVE_COUNTER
+pending_counter=$PENDING_COUNTER
+boot_attempts=$BOOT_ATTEMPTS
+max_boot_attempts=$MAX_BOOT_ATTEMPTS
+last_error=$LAST_ERROR
+EOF
+}
+
+repair_state() {
+    init_state
+    ota_load_state || die "state unavailable"
+    ota_write_state || die "cannot refresh redundant state"
+    ota_audit STATE_REPAIRED "generation=$GENERATION"
+}
+
+ota_lock || die "transaction busy"
+trap ota_unlock EXIT
+trap 'exit 1' HUP INT TERM
+
+case "${1:-}" in
+    init) init_state ;;
+    select) select_slot ;;
+    stage) shift; stage_slot "$@" ;;
+    activate-internal) activate_slot ;;
+    mark-good) mark_good ;;
+    mark-bad) init_state; ota_load_state || die "state unavailable"; rollback_pending "${2:-HEALTH_FAILED}" ;;
+    repair-state) repair_state ;;
+    status) status ;;
+    *) die "usage: $0 {init|select|stage|activate-internal|mark-good|mark-bad [reason]|repair-state|status}" ;;
+esac

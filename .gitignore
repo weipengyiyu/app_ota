@@ -1,0 +1,8 @@
+.build/
+.work/
+__pycache__/
+*.pyc
+config/host.local.conf
+compat/lab/devices.local.conf
+*.key
+*_key.pem

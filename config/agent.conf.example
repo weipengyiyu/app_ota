@@ -1,0 +1,31 @@
+# GK1221 APP-OTA network agent. Provision a device-specific copy at factory.
+ENABLED=0
+
+MQTT_HOST=ota-broker.example.com
+MQTT_PORT=8883
+MQTT_TOPIC=ota/GK1221-ADAS/DEVICE_ID/campaign
+MQTT_CLIENT_ID=GK1221-DEVICE_ID
+MQTT_USERNAME=
+MQTT_PASSWORD=
+
+# MQTT is the primary trigger. ota-agentd keeps this subscription connected
+# and reconnects with bounded exponential backoff after a network failure.
+MQTT_RECONNECT_MIN_SEC=1
+MQTT_RECONNECT_MAX_SEC=60
+AGENT_LOOP_SLEEP_SEC=1
+
+# HTTPS polling is used only while MQTT is not confirmed connected. Leave the
+# URL empty to disable fallback; production normally provisions this endpoint.
+CAMPAIGN_POLL_URL=
+HTTPS_POLL_SEC=300
+POLL_JITTER_MAX_SEC=60
+
+# Every campaign BUNDLE_URL must start with this exact HTTPS prefix.
+HTTPS_ALLOWED_PREFIX=https://ota-download.example.com/gk1221/
+TLS_CA_FILE=/etc/ota/pki/ca.pem
+TLS_CLIENT_CERT=/etc/ota/pki/device.crt
+TLS_CLIENT_KEY=/etc/ota/pki/device.key
+REQUIRE_MTLS=1
+
+OTA_DOWNLOAD_ROOT=/mnt/sd/ota_download
+KEEP_DOWNLOADED_BUNDLE=0

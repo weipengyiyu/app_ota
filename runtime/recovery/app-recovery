@@ -1,0 +1,20 @@
+#!/bin/sh
+# Trusted local recovery; preserve recovered artifact identity and counter.
+set -u
+OTA_LIB_DIR="${OTA_LIB_DIR:-/usr/lib/ota}"
+. "$OTA_LIB_DIR/ota-state-lib.sh"
+ota_lock || exit 1
+trap ota_unlock EXIT
+trap 'exit 1' HUP INT TERM
+if ota_state_from_valid_slots; then
+    ota_write_state || exit 1
+    ota_write_state || exit 1
+    ota_audit STATE_RECOVERED "slot=$CONFIRMED_SLOT,artifact=$ACTIVE_ARTIFACT,counter=$ACTIVE_COUNTER"
+    echo "Recovered slot=$CONFIRMED_SLOT version=$ACTIVE_VERSION counter=$ACTIVE_COUNTER"
+    sync
+    [ "${OTA_REBOOT_ON_RECOVERY:-1}" != 1 ] || reboot
+    exit 0
+fi
+ota_audit RECOVERY_REQUIRED no_valid_slots
+echo "No valid non-quarantined APP slot. A signed service bundle is required." >&2
+exit 1

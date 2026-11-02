@@ -1,0 +1,22 @@
+#!/bin/sh
+# Invoke after board integration has mounted persistent storage and set up
+# /run (tmpfs), SD logging, network, time, and the hardware watchdog.
+set -eu
+OTA_SBIN_DIR=${OTA_SBIN_DIR:-/usr/sbin}
+OTA_RUN_DIR=${OTA_RUN_DIR:-/run/ota}
+OTA_LOCAL_DIR=${OTA_LOCAL_DIR:-/mnt/local}
+export OTA_RUN_DIR OTA_LOCAL_DIR
+mkdir -p "$OTA_RUN_DIR"
+awk -v mp="$OTA_LOCAL_DIR" '$2 == mp { found=1 } END { exit !found }' /proc/mounts || {
+    echo "ota-start: persistent APP storage is not mounted: $OTA_LOCAL_DIR" >&2
+    exit 1
+}
+# Exclude concurrent/repeated startup, including the entire supervisor startup.
+mkdir "$OTA_RUN_DIR/start.lock" 2>/dev/null || exit 0
+trap 'rmdir "$OTA_RUN_DIR/start.lock"' EXIT
+trap 'exit 1' HUP INT TERM
+[ ! -f "$OTA_RUN_DIR/start.complete" ] || exit 0
+"$OTA_SBIN_DIR/ota-app-supervisor"
+"$OTA_SBIN_DIR/ota-agentd" >>"$OTA_RUN_DIR/agent.log" 2>&1 &
+echo "$!" > "$OTA_RUN_DIR/agent.pid"
+touch "$OTA_RUN_DIR/start.complete"

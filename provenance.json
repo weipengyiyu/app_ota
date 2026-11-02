@@ -1,0 +1,227 @@
+{
+  "host": "logic@192.168.1.216",
+  "source": "/home/logic/1221/0901/gk1221",
+  "commit": "aa6d7886de0ddd56f744d3fab1075e0fbe0c564f",
+  "paths": [
+    "board/ota_ab",
+    "XMIPCLinuxV100R003C00SPC030/source/rootfs/ota_verify",
+    "XMIPCLinuxV100R003C00SPC030/source/rootfs/ota_net",
+    "XMIPCLinuxV100R003C00SPC030/open_source/ota_net",
+    "XMIPCLinuxV100R003C00SPC030/open_source/mbedtls/mbedtls-3.6.4.tar.bz2",
+    "XMIPCLinuxV100R003C00SPC030/open_source/mbedtls/mbedtls-3.6.4.tar.bz2.sha256",
+    "XMIPCLinuxV100R003C00SPC030/open_source/mqtt/paho.mqtt.embedded-c-v1.1.0.tar.gz",
+    "XMIPCLinuxV100R003C00SPC030/open_source/http/curl-8.21.0.tar.xz",
+    "XMIPCLinuxV100R003C00SPC030/build/rootfs_image.mk",
+    "XMIPCLinuxV100R003C00SPC030/build/update_rcs.sh",
+    "XMIPCLinuxV100R003C00SPC030/sample/npu/demo_ai/demo_health_log.c",
+    "XMIPCLinuxV100R003C00SPC030/sample/npu/demo_ai/demo_health_log.h",
+    "board/jmapp/start_imx728_adas.sh"
+  ],
+  "symlinks": {
+    "board/ota_ab/ota-release": "ota-release.sh",
+    "board/ota_ab/ota-lab": "ota-lab.sh"
+  },
+  "files": [
+    {
+      "source": "board/ota_ab/ota-state-lib.sh",
+      "target": "runtime/core/ota-state-lib.sh",
+      "source_sha256": "493da98810a93d8a7b92cc47c45e49db205263ab18b8a3f1a6cce034ea308e03"
+    },
+    {
+      "source": "board/ota_ab/ota-bootctl",
+      "target": "runtime/core/ota-bootctl",
+      "source_sha256": "ce4e7505bda05d359f423f726ee10e95188eb700f98de6e0ba36ad359460f7da"
+    },
+    {
+      "source": "board/ota_ab/ota-installerd",
+      "target": "runtime/installer/ota-installerd",
+      "source_sha256": "53a594f432a2858d0751c96eb392099411c4e448a4c8e5ecee2a16ba45160229"
+    },
+    {
+      "source": "board/ota_ab/ota-migrate-legacy",
+      "target": "runtime/installer/ota-migrate-legacy",
+      "source_sha256": "3a9a099af4e12c4d0005e4d52d2680206d4fdda367562ecdebd9cd6af2dc1e0f"
+    },
+    {
+      "source": "board/ota_ab/app-recovery",
+      "target": "runtime/recovery/app-recovery",
+      "source_sha256": "76d7a6f13c0d6868ead147cbd72496659fdb4db37abdb205cb91ac7dcddbe16b"
+    },
+    {
+      "source": "board/ota_ab/ota-agentd",
+      "target": "runtime/agent/ota-agentd",
+      "source_sha256": "6f743dc2c95dd76e68f7dd8859e6d24047808a526cdf531f7f4ccf070ac9648a"
+    },
+    {
+      "source": "board/ota_ab/ota-app-supervisor",
+      "target": "runtime/supervisor/ota-app-supervisor",
+      "source_sha256": "8266d8dc7f732249742c5b11530e2b555953c7fdc961df7f0771b0e67f0d3fd0"
+    },
+    {
+      "source": "board/ota_ab/ota-healthd",
+      "target": "adapters/gk1221/ota-healthd",
+      "source_sha256": "4643c5cf74c60a6528853d7f786fda1d54ae0f1cd2100fccc8a71f5798555a01"
+    },
+    {
+      "source": "board/ota_ab/ota-activation-gate",
+      "target": "runtime/activation/ota-activation-gate",
+      "source_sha256": "9353f986a74fcca1b5c6ce6ebd526b053330fe4475fbdd4dc9ad1b1c8b1fdc8d"
+    },
+    {
+      "source": "board/ota_ab/ota-agent.conf",
+      "target": "config/agent.conf.example",
+      "source_sha256": "33e4d4d4290dc6605819045770716094a5ba254a36966ca37c75cd1285b3e5cd"
+    },
+    {
+      "source": "board/ota_ab/activation-policy.conf",
+      "target": "config/activation-policy.conf",
+      "source_sha256": "b342c195027283597e868f6a440f7433610f94b0ebd7164ff4dadfbc205c5c91"
+    },
+    {
+      "source": "board/ota_ab/build_app_bundle.sh",
+      "target": "host/release/build_app_bundle.sh",
+      "source_sha256": "af38013405dfe67bd0629753d8564cc435ee05233dd05f3e0f4834aa7eadc3ae"
+    },
+    {
+      "source": "board/ota_ab/prepare_factory_image.sh",
+      "target": "host/release/prepare_factory_image.sh",
+      "source_sha256": "b0a155d858874e6ba580d295a9f59c0da40bc457362ae288fb00f1e15632a4e5"
+    },
+    {
+      "source": "board/ota_ab/publish_network_ota.sh",
+      "target": "host/release/publish_network_ota.sh",
+      "source_sha256": "1cdd2e09cf16cbd65dbb2c1845e08cd885f4dd6db0acfcd8f901f08e992cba12"
+    },
+    {
+      "source": "board/ota_ab/ota-release.sh",
+      "target": "host/release/ota-release.sh",
+      "source_sha256": "74ce860f2544491fc067c903e11b17d164996144e0cad5d125cfcd72ce985a74"
+    },
+    {
+      "source": "board/ota_ab/ota-release-paths.sh",
+      "target": "compat/lab/ota-release-paths.sh",
+      "source_sha256": "effb36dd9e1647ac203fa2898db9a8060c8d19d4b6ade111a72fb2f1d40a8b53"
+    },
+    {
+      "source": "board/ota_ab/ota-lab.sh",
+      "target": "compat/lab/ota-lab.sh",
+      "source_sha256": "abd7657b94f0014ce83ad87bf8142e05fa658749bf9be0813241d677078cfa4c"
+    },
+    {
+      "source": "board/ota_ab/ota-lab-telnet.py",
+      "target": "compat/lab/ota-lab-telnet.py",
+      "source_sha256": "fd94c1bf1d4683c74896f79acecd84606e7015c920fe7816ff31695322eb200c"
+    },
+    {
+      "source": "board/ota_ab/ota-board-setup.sh",
+      "target": "compat/lab/ota-board-setup.sh",
+      "source_sha256": "d2768ec88c17b4bd4f8674b52aa073930949a3df4a34eef8951e790bbaabc861"
+    },
+    {
+      "source": "board/ota_ab/ota-dev-setup.sh",
+      "target": "compat/lab/ota-dev-setup.sh",
+      "source_sha256": "bae3b8a812a561715400e5eba49321a070e243904b933254ec993311e6c28790"
+    },
+    {
+      "source": "board/ota_ab/ota-bind-mounts.sh",
+      "target": "compat/lab/ota-bind-mounts.sh",
+      "source_sha256": "14b888a1a03007e3f06260b4b4b2ba551d0d6c28a9faee2fdfccd35d5eab3921"
+    },
+    {
+      "source": "board/ota_ab/devices.conf",
+      "target": "references/devices.conf.original",
+      "source_sha256": "0a7d58d47a3391be65ef00bc29f897ddb0b613098f2da0b89e70563eeee7ab88"
+    },
+    {
+      "source": "board/ota_ab/devices.local.conf.example",
+      "target": "compat/lab/devices.local.conf.example",
+      "source_sha256": "20e6f89fecca1d274182153e4d76760ad36b5b091ea86846d956c986ed44db5d"
+    },
+    {
+      "source": "XMIPCLinuxV100R003C00SPC030/open_source/ota_net/ota_mqtt_sub.c",
+      "target": "native/mqtt/ota_mqtt_sub.c",
+      "source_sha256": "ef6d8a5fdc3831480f70b92f0d69da7c3a7d15091d7f79d6edc3bccea7a6cf4f"
+    },
+    {
+      "source": "XMIPCLinuxV100R003C00SPC030/open_source/ota_net/ota_mqtt_platform.c",
+      "target": "native/mqtt/ota_mqtt_platform.c",
+      "source_sha256": "536d9adacb8a74a9bf88451b92c6a260eed74e4ea5523539d59c06a32728255a"
+    },
+    {
+      "source": "XMIPCLinuxV100R003C00SPC030/open_source/ota_net/ota_mqtt_platform.h",
+      "target": "native/mqtt/ota_mqtt_platform.h",
+      "source_sha256": "0c4140c2bada7f4b6cbcbf26e1bb88a9a48cc8bc2a38d5b9775d5fe1fc773a95"
+    },
+    {
+      "source": "XMIPCLinuxV100R003C00SPC030/open_source/ota_net/paho-embedded-gcc12.patch",
+      "target": "native/mqtt/paho-embedded-gcc12.patch",
+      "source_sha256": "e01218297ab4f6694f175ace8646f6ca6855e871339f6b4854b8ea663b678b46"
+    },
+    {
+      "source": "XMIPCLinuxV100R003C00SPC030/open_source/ota_net/README.md",
+      "target": "native/mqtt/README.md",
+      "source_sha256": "b6d2733ebf9d2ed3a15dfc601ff8849d1426ca00c18e150f8598986510cae2b0"
+    },
+    {
+      "source": "XMIPCLinuxV100R003C00SPC030/source/rootfs/ota_verify/ota_verify_sig.c",
+      "target": "native/verify/ota_verify_sig.c",
+      "source_sha256": "c55e39066de46a065d5b65cc882b03d27d2378b0bf21a0dc9c17d0852fdbdfb4"
+    },
+    {
+      "source": "XMIPCLinuxV100R003C00SPC030/source/rootfs/ota_verify/ota_pubkey.pem",
+      "target": "references/release-public-key.pem",
+      "source_sha256": "00f0d429d86665a90af898a7a03679b05ff34271817f7d602213307bc2c1202c"
+    },
+    {
+      "source": "XMIPCLinuxV100R003C00SPC030/source/rootfs/ota_verify/Makefile",
+      "target": "build/verify.mk",
+      "source_sha256": "e130775f00da8effe26beb569e3388139925411d2192b6dd78b37b2ed047e8f6"
+    },
+    {
+      "source": "XMIPCLinuxV100R003C00SPC030/source/rootfs/ota_net/Makefile",
+      "target": "build/network.mk",
+      "source_sha256": "de54a927196761e0b9859b451fc992d700634112014b3e4fd4e38eea6e78fd64"
+    },
+    {
+      "source": "XMIPCLinuxV100R003C00SPC030/open_source/mbedtls/mbedtls-3.6.4.tar.bz2",
+      "target": "third_party/mbedtls/mbedtls-3.6.4.tar.bz2",
+      "source_sha256": "ec35b18a6c593cf98c3e30db8b98ff93e8940a8c4e690e66b41dfc011d678110"
+    },
+    {
+      "source": "XMIPCLinuxV100R003C00SPC030/open_source/mqtt/paho.mqtt.embedded-c-v1.1.0.tar.gz",
+      "target": "third_party/mqtt/paho.mqtt.embedded-c-v1.1.0.tar.gz",
+      "source_sha256": "20fd257add47988bde01168feaf250c3fccf5fc366fd3b19ca915dde360c3ede"
+    },
+    {
+      "source": "XMIPCLinuxV100R003C00SPC030/open_source/http/curl-8.21.0.tar.xz",
+      "target": "third_party/http/curl-8.21.0.tar.xz",
+      "source_sha256": "aa1b66a70eace83dc624508745646c08ae561de512ab403adffb93ac87fc72e6"
+    },
+    {
+      "source": "XMIPCLinuxV100R003C00SPC030/build/rootfs_image.mk",
+      "target": "references/sdk/rootfs_image.mk",
+      "source_sha256": "f97b2cce0669f3edb2b1c897ec74067c1d9e492900e4db4877fc80d002d279bc"
+    },
+    {
+      "source": "XMIPCLinuxV100R003C00SPC030/build/update_rcs.sh",
+      "target": "references/sdk/update_rcs.sh",
+      "source_sha256": "bea6faeaf3ef1b671615669c2fee7a42926e505385f119c1b26ba65d4b298b3c"
+    },
+    {
+      "source": "XMIPCLinuxV100R003C00SPC030/sample/npu/demo_ai/demo_health_log.c",
+      "target": "adapters/gk1221/reference/demo_health_log.c",
+      "source_sha256": "4c668fbe5a9ee6c564cc0f2267c02c25846a24cff07e3f159c223c33e35f3ae9"
+    },
+    {
+      "source": "XMIPCLinuxV100R003C00SPC030/sample/npu/demo_ai/demo_health_log.h",
+      "target": "adapters/gk1221/reference/demo_health_log.h",
+      "source_sha256": "ce4fb74aa308f8ae328baa1a36fc6d810929fc9c931f7f8e017ccf4d1fc34bc3"
+    },
+    {
+      "source": "board/jmapp/start_imx728_adas.sh",
+      "target": "adapters/gk1221/start_imx728_adas.sh",
+      "source_sha256": "d82c25d58a6af75a6a8e28ecb839db5a038943c24b873b0eaab877f2a8b7db0b"
+    }
+  ],
+  "note": "Hashes describe source bytes; extracted files may be refactored. Live source repos unchanged."
+}

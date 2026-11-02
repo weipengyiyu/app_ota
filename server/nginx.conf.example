@@ -1,0 +1,17 @@
+# Template for a dedicated server block. Install only after site provisioning.
+# Replace server_name, certificate paths and alias with your deployment values.
+server {
+    listen 443 ssl;
+    server_name ota-download.example.com;
+    ssl_certificate /etc/app-ota/pki/server.crt;
+    ssl_certificate_key /etc/app-ota/pki/server.key;
+    ssl_client_certificate /etc/app-ota/pki/ca.pem;
+    ssl_verify_client on;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    location /gk1221/ {
+        alias /srv/ota/gk1221/;
+        autoindex off;
+        limit_except GET HEAD { deny all; }
+    }
+    location ~ /\. { deny all; }
+}

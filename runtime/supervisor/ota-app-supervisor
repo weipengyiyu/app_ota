@@ -1,0 +1,79 @@
+#!/bin/sh
+set -u
+OTA_LIB_DIR=${OTA_LIB_DIR:-/usr/lib/ota}
+. "$OTA_LIB_DIR/ota-state-lib.sh"
+
+OTA_BOOTCTL="${OTA_BOOTCTL:-/usr/sbin/ota-bootctl}"
+OTA_HEALTHD="${OTA_HEALTHD:-/usr/sbin/ota-healthd}"
+OTA_RUN_DIR="${OTA_RUN_DIR:-/run/ota}"
+OTA_LOG_DIR="${OTA_LOG_DIR:-/mnt/sd}"
+
+mkdir -p "$OTA_RUN_DIR" "$OTA_LOG_DIR" || {
+    echo "ota-app-supervisor: cannot create runtime/log directories" >&2
+    exit 1
+}
+[ -d "$OTA_LOG_DIR" ] && [ -w "$OTA_LOG_DIR" ] || {
+    echo "ota-app-supervisor: log directory is not writable: $OTA_LOG_DIR" >&2
+    exit 1
+}
+
+app_root=$($OTA_BOOTCTL select) || {
+    echo "ota-app-supervisor: no bootable APP slot; entering recovery" >&2
+    [ -x "${OTA_RECOVERY:-/usr/sbin/app-recovery}" ] && exec "${OTA_RECOVERY:-/usr/sbin/app-recovery}"
+    exit 1
+}
+
+case "$app_root" in
+    "$OTA_SLOT_DIR/app_A/root"|"$OTA_SLOT_DIR/app_B/root") ;;
+    *)
+        echo "ota-app-supervisor: invalid selected root: $app_root" >&2
+        exit 1
+        ;;
+esac
+
+APP_LOG_STAMP=$(date +%Y%m%d_%H%M%S 2>/dev/null || echo boot)
+APP_LOG="$OTA_LOG_DIR/ota_supervisor_${APP_LOG_STAMP}_$$.log"
+echo "$APP_LOG" > "$OTA_RUN_DIR/ota_supervisor.log.path"
+
+echo "ota-app-supervisor: starting $app_root log=$APP_LOG"
+# Keep launcher output separate from demo_ai's structured health log.  Health
+# consumers only trust /mnt/sd/demo_ai_<time>_<demo-pid>.log.
+# if ! sh "$app_root/start_imx728_adas.sh" "$app_root" >"$APP_LOG" 2>&1; then
+if ! sh "$app_root/$OTA_APP_LAUNCHER" "$app_root" >"$APP_LOG" 2>&1; then
+    echo "ota-app-supervisor: application startup failed" >&2
+    tail -50 "$APP_LOG" >/dev/console 2>&1 || true
+    if [ "$(cat "$OTA_RUN_DIR/trial" 2>/dev/null)" = 1 ]; then
+        "$OTA_BOOTCTL" mark-bad START_FAILED || true
+        sync
+        [ "${OTA_REBOOT_ON_FAILURE:-1}" = 1 ] && reboot
+    fi
+    exit 1
+fi
+
+APP_PID=$(cat "$OTA_RUN_DIR/demo_ai.pid" 2>/dev/null || echo 0)
+case "$APP_PID" in
+    ''|*[!0-9]*) APP_PID=0 ;;
+esac
+if [ "$APP_PID" -gt 1 ]; then
+    APP_HEALTH_LOG=$(ls -1t "$OTA_LOG_DIR"/demo_ai_*_"$APP_PID".log 2>/dev/null | head -1)
+    [ -z "$APP_HEALTH_LOG" ] || printf '%s\n' "$APP_HEALTH_LOG" > "$OTA_RUN_DIR/demo_ai.health.log.path"
+fi
+
+if [ "$(cat "$OTA_RUN_DIR/trial" 2>/dev/null)" = 1 ]; then
+    HEALTHD_LOG="$OTA_LOG_DIR/ota_healthd_${APP_LOG_STAMP}_$$.log"
+    printf '%s\n' "$HEALTHD_LOG" > "$OTA_RUN_DIR/ota_healthd.log.path"
+    "$OTA_HEALTHD" >"$HEALTHD_LOG" 2>&1 &
+    HEALTHD_PID=$!
+    printf '%s\n' "$HEALTHD_PID" > "$OTA_RUN_DIR/ota_healthd.pid"
+    sleep 1
+    if ! kill -0 "$HEALTHD_PID" 2>/dev/null; then
+        echo "ota-app-supervisor: ota-healthd failed to start; log=$HEALTHD_LOG" >&2
+        "$OTA_BOOTCTL" mark-bad HEALTHD_START_FAILED || true
+        sync
+        [ "${OTA_REBOOT_ON_FAILURE:-1}" = 1 ] && reboot
+        exit 1
+    fi
+    echo "ota-app-supervisor: ota-healthd pid=$HEALTHD_PID log=$HEALTHD_LOG"
+fi
+
+exit 0

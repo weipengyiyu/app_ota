@@ -1,0 +1,361 @@
+#!/bin/sh
+# MQTT notification + HTTPS/mTLS download orchestrator for GK1221 APP-OTA.
+# This service may download, verify and stage. It never publishes robot safety,
+# authorizes activation or reboots the device.
+set -u
+
+CONFIG=${OTA_AGENT_CONFIG:-/etc/ota/agent.conf}
+MQTT_SUB=${OTA_MQTT_SUB:-/usr/bin/ota-mqtt-sub}
+HTTP=${OTA_HTTP:-/usr/bin/ota-http}
+VERIFY=${OTA_VERIFY_BIN:-/usr/bin/ota_verify_sig}
+PUBKEY=${OTA_PUBKEY:-/etc/ota_pubkey.pem}
+INSTALLER=${OTA_INSTALLER:-/usr/sbin/ota-installerd}
+BOOTCTL=${OTA_BOOTCTL:-/usr/sbin/ota-bootctl}
+RUN_DIR=${OTA_RUN_DIR:-/run/ota}
+AUDIT_LOG=${OTA_AUDIT_LOG:-/mnt/local/ota_audit/events.log}
+
+log()
+{
+    printf '%s ota-agentd: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >/dev/console
+}
+
+audit()
+{
+    mkdir -p "$(dirname "$AUDIT_LOG")" 2>/dev/null || return 0
+    printf '%s event=%s detail=%s\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" >> "$AUDIT_LOG"
+}
+
+config_error()
+{
+    log "configuration error: $*"
+    audit AGENT_CONFIG_FAILED "$*"
+    exit 1
+}
+
+[ -r "$CONFIG" ] || exit 0
+# The configuration is root-owned firmware/provisioning data, not network input.
+. "$CONFIG"
+[ ! -r "${OTA_PRODUCT_CONFIG:-/etc/ota/product.conf}" ] || . "${OTA_PRODUCT_CONFIG:-/etc/ota/product.conf}"
+[ "${ENABLED:-0}" = 1 ] || exit 0
+
+: "${MQTT_HOST:?}"
+: "${MQTT_PORT:?}"
+: "${MQTT_TOPIC:?}"
+: "${MQTT_CLIENT_ID:?}"
+: "${HTTPS_ALLOWED_PREFIX:?}"
+: "${TLS_CA_FILE:?}"
+: "${OTA_DOWNLOAD_ROOT:?}"
+
+case "$MQTT_PORT" in ''|*[!0-9]*) config_error invalid_MQTT_PORT ;; esac
+MQTT_RECONNECT_MIN_SEC=${MQTT_RECONNECT_MIN_SEC:-1}
+MQTT_RECONNECT_MAX_SEC=${MQTT_RECONNECT_MAX_SEC:-60}
+HTTPS_POLL_SEC=${HTTPS_POLL_SEC:-${CAMPAIGN_RECHECK_SEC:-300}}
+AGENT_LOOP_SLEEP_SEC=${AGENT_LOOP_SLEEP_SEC:-1}
+case "$MQTT_RECONNECT_MIN_SEC" in ''|*[!0-9]*) config_error invalid_MQTT_RECONNECT_MIN_SEC ;; esac
+case "$MQTT_RECONNECT_MAX_SEC" in ''|*[!0-9]*) config_error invalid_MQTT_RECONNECT_MAX_SEC ;; esac
+case "$HTTPS_POLL_SEC" in ''|*[!0-9]*) config_error invalid_HTTPS_POLL_SEC ;; esac
+case "${POLL_JITTER_MAX_SEC:-60}" in ''|*[!0-9]*) config_error invalid_POLL_JITTER ;; esac
+case "$AGENT_LOOP_SLEEP_SEC" in ''|*[!0-9]*) config_error invalid_AGENT_LOOP_SLEEP_SEC ;; esac
+[ "$MQTT_RECONNECT_MIN_SEC" -ge 1 ] || config_error MQTT_RECONNECT_MIN_SEC_must_be_positive
+[ "$MQTT_RECONNECT_MAX_SEC" -ge "$MQTT_RECONNECT_MIN_SEC" ] || config_error invalid_MQTT_RECONNECT_range
+[ "$HTTPS_POLL_SEC" -ge 1 ] || config_error HTTPS_POLL_SEC_must_be_positive
+[ "$AGENT_LOOP_SLEEP_SEC" -ge 1 ] || config_error AGENT_LOOP_SLEEP_SEC_must_be_positive
+case "$HTTPS_ALLOWED_PREFIX" in https://*/) ;; *) config_error HTTPS_prefix_must_end_with_slash ;; esac
+[ -x "$MQTT_SUB" ] || config_error missing_ota-mqtt-sub
+[ -x "$HTTP" ] || config_error missing_ota-http
+[ -x "$VERIFY" ] || config_error missing_signature_verifier
+[ -x "$INSTALLER" ] || config_error missing_installer
+[ -x "$BOOTCTL" ] || config_error missing_bootctl
+[ -s "$PUBKEY" ] || config_error missing_public_key
+[ -s "$TLS_CA_FILE" ] || config_error missing_TLS_CA
+
+if [ "${REQUIRE_MTLS:-1}" = 1 ]; then
+    [ -s "${TLS_CLIENT_CERT:-}" ] || config_error missing_client_certificate
+    [ -s "${TLS_CLIENT_KEY:-}" ] || config_error missing_client_key
+fi
+
+mkdir -p "$RUN_DIR" "$OTA_DOWNLOAD_ROOT" || config_error cannot_create_runtime_dirs
+umask 077
+LOCK_DIR=$RUN_DIR/ota-agentd.lock
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    log "another instance is already running"
+    exit 0
+fi
+MQTT_PID=
+MQTT_READY_FILE=$RUN_DIR/mqtt.connected
+NOTIFY_FILE=$RUN_DIR/campaign.notify
+POLL_FILE=$RUN_DIR/campaign.poll
+PROCESSING_FILE=$RUN_DIR/campaign.processing.$$
+cleanup()
+{
+    if [ -n "$MQTT_PID" ]; then
+        kill "$MQTT_PID" 2>/dev/null || true
+        wait "$MQTT_PID" 2>/dev/null || true
+    fi
+    rm -rf "$LOCK_DIR"
+    rm -f "$MQTT_READY_FILE" "$POLL_FILE" "$PROCESSING_FILE" \
+        "$RUN_DIR/campaign.notify.tmp"
+}
+trap cleanup EXIT
+trap 'exit 0' HUP INT TERM
+rm -f "$MQTT_READY_FILE" "$POLL_FILE" "$PROCESSING_FILE" "$NOTIFY_FILE"
+
+field()
+{
+    key=$1
+    file=$2
+    count=$(grep -c "^${key}=" "$file" 2>/dev/null || true)
+    [ "$count" = 1 ] || return 1
+    sed -n "s/^${key}=//p" "$file"
+}
+
+is_token()
+{
+    case "$1" in ''|*[!A-Za-z0-9._:-]*) return 1 ;; *) return 0 ;; esac
+}
+
+http_get()
+{
+    url=$1
+    destination=$2
+    partial="${destination}.part"
+    mkdir -p "$(dirname "$destination")" || return 1
+
+    set -- --silent --show-error --fail --location --max-redirs 2 \
+        --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 1800 \
+        --retry 4 --retry-delay 3 --continue-at - \
+        --cacert "$TLS_CA_FILE" --output "$partial"
+    if [ "${REQUIRE_MTLS:-1}" = 1 ]; then
+        set -- "$@" --cert "$TLS_CLIENT_CERT" --key "$TLS_CLIENT_KEY"
+    fi
+    if ! "$HTTP" "$@" "$url"; then
+        # A server that does not support Range can reject a resumed transfer.
+        rm -f "$partial"
+        "$HTTP" "$@" "$url" || return 1
+    fi
+    mv "$partial" "$destination"
+}
+
+download_and_stage()
+{
+    notice=$1
+    format=$(field FORMAT_VERSION "$notice") || return 10
+    product=$(field PRODUCT_ID "$notice") || return 10
+    campaign=$(field CAMPAIGN_ID "$notice") || return 10
+    version=$(field APP_VERSION "$notice") || return 10
+    counter=$(field RELEASE_COUNTER "$notice") || return 10
+    bundle_url=$(field BUNDLE_URL "$notice") || return 10
+
+    [ "$format" = 1 ] || return 10
+    [ "$product" = "${OTA_PRODUCT_ID:-GK1221-ADAS}" ] || return 10
+    is_token "$campaign" && is_token "$version" || return 10
+    case "$counter" in ''|*[!0-9]*) return 10 ;; esac
+    case "$bundle_url" in "$HTTPS_ALLOWED_PREFIX"*) ;; *) return 11 ;; esac
+    case "$bundle_url" in *[!A-Za-z0-9._~:/?\&=%+-]*) return 11 ;; esac
+
+    log "Campaign notice received campaign=$campaign version=$version counter=$counter"
+    audit AGENT_NOTICE_RECEIVED "campaign=$campaign,version=$version,counter=$counter"
+
+    boot_status=$($BOOTCTL status) || return 12
+    phase=$(printf '%s\n' "$boot_status" | sed -n 's/^phase=//p' | sed -n '1p')
+    current_counter=$(printf '%s\n' "$boot_status" | sed -n 's/^active_counter=//p' | sed -n '1p')
+    pending_counter=$(printf '%s\n' "$boot_status" | sed -n 's/^pending_counter=//p' | sed -n '1p')
+    case "$current_counter" in ''|*[!0-9]*) return 12 ;; esac
+    case "$pending_counter" in ''|*[!0-9]*) return 12 ;; esac
+    [ "$counter" -gt "$current_counter" ] || {
+        log "ignoring non-new campaign=$campaign counter=$counter current=$current_counter"
+        return 0
+    }
+
+    # A retained MQTT notification is delivered again on every reconnect.
+    # Once that counter is already pending, do not redownload or reinstall it.
+    # A newer campaign remains retained/pollable and will be reconsidered after
+    # the current transaction reaches ACTIVE or rolls back to ACTIVE.
+    case "$phase" in
+        ACTIVE|ROLLED_BACK)
+            ;;
+        STAGED|TRIAL_ARMED|TRIAL)
+            if [ "$counter" -le "$pending_counter" ]; then
+                log "ignoring already-pending campaign=$campaign counter=$counter pending=$pending_counter phase=$phase"
+            else
+                log "deferring campaign=$campaign counter=$counter while phase=$phase pending=$pending_counter"
+            fi
+            return 0
+            ;;
+        *)
+            return 12
+            ;;
+    esac
+
+    work=$OTA_DOWNLOAD_ROOT/${campaign}.${counter}.downloading
+    bundle=$OTA_DOWNLOAD_ROOT/${campaign}.${counter}.bundle
+    case "$work:$bundle" in
+        "$OTA_DOWNLOAD_ROOT"/*:"$OTA_DOWNLOAD_ROOT"/*) ;;
+        *) return 12 ;;
+    esac
+    rm -rf "$work"
+    mkdir -p "$work/payload" || return 12
+
+    log "downloading signed metadata campaign=$campaign version=$version"
+    for metadata in manifest.env manifest.sha256 signed-data.bin manifest.sig; do
+        http_get "$bundle_url/$metadata" "$work/$metadata" || return 20
+    done
+
+    cat "$work/manifest.env" "$work/manifest.sha256" > "$work/reconstructed.bin" || return 21
+    expected_signed=$(sha256sum "$work/signed-data.bin" | awk '{print $1}')
+    actual_signed=$(sha256sum "$work/reconstructed.bin" | awk '{print $1}')
+    [ "$expected_signed" = "$actual_signed" ] || return 21
+    "$VERIFY" "$PUBKEY" "$work/signed-data.bin" "$work/manifest.sig" || return 22
+
+    manifest_version=$(field APP_VERSION "$work/manifest.env") || return 23
+    manifest_counter=$(field RELEASE_COUNTER "$work/manifest.env") || return 23
+    manifest_product=$(field PRODUCT_ID "$work/manifest.env") || return 23
+    [ "$manifest_version" = "$version" ] &&
+        [ "$manifest_counter" = "$counter" ] &&
+        [ "$manifest_product" = "$product" ] || return 23
+
+    log "metadata signature valid; downloading payload"
+    while read -r expected relative extra; do
+        [ -n "$expected" ] && [ -n "$relative" ] && [ -z "${extra:-}" ] || return 24
+        case "$expected" in *[!0-9a-fA-F]*|'') return 24 ;; esac
+        [ "${#expected}" -eq 64 ] || return 24
+        case "$relative" in ./*) path=${relative#./} ;; *) return 24 ;; esac
+        case "/$path/" in */../*|*/./*|*//*) return 24 ;; esac
+        case "$path" in ''|/*|*[!A-Za-z0-9._/-]*) return 24 ;; esac
+        http_get "$bundle_url/payload/$path" "$work/payload/$path" || return 25
+    done < "$work/manifest.sha256"
+
+    (cd "$work/payload" && sha256sum -c "$work/manifest.sha256") || return 26
+    rm -f "$work/reconstructed.bin"
+    rm -rf "$bundle"
+    mv "$work" "$bundle" || return 27
+    sync
+
+    log "installing verified campaign=$campaign into inactive slot"
+    TMPDIR="$RUN_DIR" "$INSTALLER" install "$bundle" || return 30
+    audit AGENT_STAGED "campaign=$campaign,version=$version,counter=$counter"
+    if [ "${KEEP_DOWNLOADED_BUNDLE:-0}" != 1 ]; then
+        rm -rf "$bundle"
+        sync
+    fi
+    log "staged version=$version; activation remains gated and no reboot was requested"
+    return 0
+}
+
+start_mqtt_listener()
+{
+    rm -f "$MQTT_READY_FILE"
+    set -- "$MQTT_SUB" --host "$MQTT_HOST" --port "$MQTT_PORT" \
+        --topic "$MQTT_TOPIC" --client-id "$MQTT_CLIENT_ID" \
+        --ca "$TLS_CA_FILE" --output "$NOTIFY_FILE" \
+        --continuous --ready-file "$MQTT_READY_FILE"
+    [ -z "${MQTT_USERNAME:-}" ] || set -- "$@" --username "$MQTT_USERNAME"
+    [ -z "${MQTT_PASSWORD:-}" ] || set -- "$@" --password "$MQTT_PASSWORD"
+    if [ "${REQUIRE_MTLS:-1}" = 1 ]; then
+        set -- "$@" --cert "$TLS_CLIENT_CERT" --key "$TLS_CLIENT_KEY"
+    fi
+    "$@" &
+    MQTT_PID=$!
+    audit MQTT_CONNECTING "pid=$MQTT_PID,topic=$MQTT_TOPIC"
+}
+
+fetch_poll_notice()
+{
+    [ -n "${CAMPAIGN_POLL_URL:-}" ] || return 1
+    case "$CAMPAIGN_POLL_URL" in "$HTTPS_ALLOWED_PREFIX"*) ;; *) return 1 ;; esac
+    rm -f "$POLL_FILE"
+    http_get "$CAMPAIGN_POLL_URL" "$POLL_FILE" || return 1
+    [ -s "$POLL_FILE" ] || return 1
+    mv "$POLL_FILE" "$NOTIFY_FILE"
+}
+
+process_pending_notice()
+{
+    [ -s "$NOTIFY_FILE" ] || return 1
+    rm -f "$PROCESSING_FILE"
+    mv "$NOTIFY_FILE" "$PROCESSING_FILE" || return 1
+    if download_and_stage "$PROCESSING_FILE"; then
+        rm -f "$PROCESSING_FILE"
+    else
+        result=$?
+        log "campaign processing failed rc=$result"
+        audit AGENT_CAMPAIGN_FAILED "rc=$result"
+        mv "$PROCESSING_FILE" \
+            "$OTA_DOWNLOAD_ROOT/rejected.$(date +%s).notice" 2>/dev/null || true
+    fi
+    return 0
+}
+
+schedule_next_https_poll()
+{
+    now=$1
+    jitter=0
+    jitter_max=${POLL_JITTER_MAX_SEC:-60}
+    if [ "$jitter_max" -gt 0 ]; then
+        jitter=$((now % (jitter_max + 1)))
+    fi
+    NEXT_HTTPS_POLL=$((now + HTTPS_POLL_SEC + jitter))
+}
+
+audit AGENT_STARTED "mode=persistent-mqtt,topic=$MQTT_TOPIC"
+MQTT_BACKOFF=$MQTT_RECONNECT_MIN_SEC
+NEXT_MQTT_ATTEMPT=0
+NEXT_HTTPS_POLL=0
+MQTT_READY_LOGGED=0
+
+while :; do
+    now=$(date +%s)
+
+    # The listener atomically publishes the newest Campaign. Claiming it with
+    # rename lets MQTT remain connected while HTTPS verification/install runs.
+    if process_pending_notice; then
+        MQTT_BACKOFF=$MQTT_RECONNECT_MIN_SEC
+    fi
+
+    if [ -n "$MQTT_PID" ] && ! kill -0 "$MQTT_PID" 2>/dev/null; then
+        wait "$MQTT_PID" 2>/dev/null
+        mqtt_rc=$?
+        log "MQTT listener disconnected rc=$mqtt_rc; reconnect in ${MQTT_BACKOFF}s"
+        audit MQTT_DISCONNECTED "rc=$mqtt_rc,retry_sec=$MQTT_BACKOFF"
+        MQTT_PID=
+        MQTT_READY_LOGGED=0
+        rm -f "$MQTT_READY_FILE"
+        NEXT_MQTT_ATTEMPT=$((now + MQTT_BACKOFF))
+        MQTT_BACKOFF=$((MQTT_BACKOFF * 2))
+        if [ "$MQTT_BACKOFF" -gt "$MQTT_RECONNECT_MAX_SEC" ]; then
+            MQTT_BACKOFF=$MQTT_RECONNECT_MAX_SEC
+        fi
+        # MQTT is down: allow the signed HTTPS fallback to run immediately.
+        NEXT_HTTPS_POLL=0
+    fi
+
+    if [ -z "$MQTT_PID" ] && [ "$now" -ge "$NEXT_MQTT_ATTEMPT" ]; then
+        log "starting persistent MQTT listener"
+        start_mqtt_listener
+    fi
+
+    if [ -s "$MQTT_READY_FILE" ] && [ "$MQTT_READY_LOGGED" -eq 0 ]; then
+        log "MQTT listener connected; HTTPS polling is standby only"
+        audit MQTT_CONNECTED "pid=$MQTT_PID,topic=$MQTT_TOPIC"
+        MQTT_READY_LOGGED=1
+        MQTT_BACKOFF=$MQTT_RECONNECT_MIN_SEC
+        schedule_next_https_poll "$now"
+    fi
+
+    # HTTPS polling is a fallback only. Never poll while MQTT is confirmed
+    # connected; when disconnected, poll at the configured randomized period.
+    if [ ! -s "$MQTT_READY_FILE" ] && [ -n "${CAMPAIGN_POLL_URL:-}" ] && \
+       [ "$now" -ge "$NEXT_HTTPS_POLL" ]; then
+        log "MQTT unavailable; checking HTTPS Campaign fallback"
+        if fetch_poll_notice; then
+            audit HTTPS_FALLBACK_NOTICE "url=$CAMPAIGN_POLL_URL"
+        else
+            log "HTTPS Campaign fallback unavailable"
+            audit HTTPS_FALLBACK_FAILED "url=$CAMPAIGN_POLL_URL"
+        fi
+        schedule_next_https_poll "$now"
+    fi
+
+    sleep "$AGENT_LOOP_SLEEP_SEC"
+done

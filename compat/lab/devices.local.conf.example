@@ -1,0 +1,21 @@
+# Per-machine overrides for ota-lab on dev hosts (250, 205, ...).
+# Prefer: ./board/ota_ab/ota-dev-setup.sh  (generates devices.local.conf automatically)
+# Manual copy: devices.local.conf.example -> devices.local.conf
+#
+# Requirements on dev host:
+#   1. NFS export with insecure (embedded board uses non-privileged ports)
+#   2. OTA_WORK_ROOT under NFS_EXPORT_ROOT
+#   3. SIGN_KEY from 216
+#   4. Run ota-lab as normal user, NOT sudo
+
+# Example: ps@192.168.1.250, gk1221 at /mnt/nvme0n1/wp/gk1221
+NFS_SERVER=192.168.1.250
+NFS_EXPORT_ROOT=/mnt/nvme0n1
+OTA_WORK_ROOT=/mnt/nvme0n1/ota-lab-work
+SIGN_KEY=/home/ps/1221/ota_key.pem
+
+# Example: another dev host 192.168.1.205
+# NFS_SERVER=192.168.1.205
+# NFS_EXPORT_ROOT=/home/dev
+# OTA_WORK_ROOT=/home/dev/ota-lab-work
+# SIGN_KEY=/home/dev/1221/ota_key.pem
